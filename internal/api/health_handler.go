@@ -7,40 +7,52 @@ import (
 	"github.com/croncheck/internal/healthcheck"
 )
 
-// HealthHandler serves the /health endpoint.
+// HealthHandler serves health check status over HTTP.
 type HealthHandler struct {
 	checker *healthcheck.Checker
 }
 
-// NewHealthHandler creates a HealthHandler backed by the given Checker.
-func NewHealthHandler(c *healthcheck.Checker) *HealthHandler {
-	return &HealthHandler{checker: c}
+// NewHealthHandler creates a new HealthHandler backed by the given Checker.
+func NewHealthHandler(checker *healthcheck.Checker) *HealthHandler {
+	return &HealthHandler{checker: checker}
 }
 
-// ServeHTTP handles GET /health and returns a JSON health status.
+// ServeHTTP handles GET /health requests.
 func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	status := h.checker.Run()
+	results := h.checker.Run()
 
-	code := http.StatusOK
-	if !status.Healthy {
-		code = http.StatusServiceUnavailable
+	type response struct {
+		Status string            `json:"status"`
+		Checks map[string]string `json:"checks,omitempty"`
+	}
+
+	resp := response{
+		Status: "ok",
+		Checks: make(map[string]string),
+	}
+
+	overall := http.StatusOK
+	for name, err := range results {
+		if err != nil {
+			resp.Status = "degraded"
+			resp.Checks[name] = err.Error()
+			overall = http.StatusServiceUnavailable
+		} else {
+			resp.Checks[name] = "ok"
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-
-	if err := json.NewEncoder(w).Encode(status); err != nil {
-		http.Error(w, "failed to encode response", http.StatusInternalServerError)
-	}
+	w.WriteHeader(overall)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// RegisterHealthRoute mounts the health handler on the given mux.
-func RegisterHealthRoute(mux *http.ServeMux, c *healthcheck.Checker) {
-	h := NewHealthHandler(c)
+// RegisterHealthRoute registers the health endpoint on the provided mux.
+func (h *HealthHandler) RegisterHealthRoute(mux *http.ServeMux) {
 	mux.Handle("/health", h)
 }
