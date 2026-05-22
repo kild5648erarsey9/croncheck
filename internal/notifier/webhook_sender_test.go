@@ -75,3 +75,31 @@ func TestWebhookSender_Send_InvalidURL(t *testing.T) {
 		t.Error("expected connection error, got nil")
 	}
 }
+
+func TestWebhookSender_Send_NonSuccessStatusCodes(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{"bad request", http.StatusBadRequest},
+		{"unauthorized", http.StatusUnauthorized},
+		{"not found", http.StatusNotFound},
+		{"service unavailable", http.StatusServiceUnavailable},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.statusCode)
+			}))
+			defer server.Close()
+
+			s := NewWebhookSender(server.URL)
+			event := alert.Event{JobID: "job-4", Message: "check"}
+
+			if err := s.Send(event); err == nil {
+				t.Errorf("expected error for status %d, got nil", tc.statusCode)
+			}
+		})
+	}
+}
