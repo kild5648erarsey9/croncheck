@@ -1,4 +1,3 @@
-// Package audit provides a simple append-only audit log for cron job lifecycle events.
 package audit
 
 import (
@@ -6,71 +5,60 @@ import (
 	"time"
 )
 
-// EventKind describes the type of audit event.
-type EventKind string
-
-const (
-	EventJobStarted  EventKind = "job.started"
-	EventJobFinished EventKind = "job.finished"
-	EventJobTimeout  EventKind = "job.timeout"
-	EventAlertSent   EventKind = "alert.sent"
-)
-
-// Entry is a single immutable audit log record.
+// Entry records the outcome of a single cron job execution.
 type Entry struct {
-	Timestamp time.Time
-	Kind      EventKind
 	JobID     string
-	Message   string
-	Meta      map[string]string
+	Success   bool
+	Duration  time.Duration
+	Timestamp time.Time
 }
 
-// Log holds an in-memory sequence of audit entries.
+// clock is a replaceable time source for testing.
+var clock = func() time.Time { return time.Now() }
+
+// Log is a thread-safe, append-only store of audit entries.
 type Log struct {
 	mu      sync.RWMutex
 	entries []Entry
-	clock   func() time.Time
 }
 
-// New creates a new audit Log.
+// New creates an empty audit Log.
 func New() *Log {
-	return &Log{clock: time.Now}
+	return &Log{}
 }
 
-// Record appends a new entry to the log.
-func (l *Log) Record(kind EventKind, jobID, message string, meta map[string]string) {
-	entry := Entry{
-		Timestamp: l.clock(),
-		Kind:      kind,
-		JobID:     jobID,
-		Message:   message,
-		Meta:      meta,
-	}
+// Record appends a new entry for the given job.
+func (l *Log) Record(jobID string, success bool, duration time.Duration) {
 	l.mu.Lock()
-	l.entries = append(l.entries, entry)
-	l.mu.Unlock()
+	defer l.mu.Unlock()
+	l.entries = append(l.entries, Entry{
+		JobID:     jobID,
+		Success:   success,
+		Duration:  duration,
+		Timestamp: clock(),
+	})
 }
 
-// All returns a snapshot of all audit entries.
+// All returns a shallow copy of all entries.
 func (l *Log) All() []Entry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	out := make([]Entry, len(l.entries))
-	copy(out, l.entries)
-	return out
+	result := make([]Entry, len(l.entries))
+	copy(result, l.entries)
+	return result
 }
 
-// FilterByJob returns all entries for a given job ID.
+// FilterByJob returns entries matching the given job ID, or nil if none found.
 func (l *Log) FilterByJob(jobID string) []Entry {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	var out []Entry
+	var result []Entry
 	for _, e := range l.entries {
 		if e.JobID == jobID {
-			out = append(out, e)
+			result = append(result, e)
 		}
 	}
-	return out
+	return result
 }
 
 // Len returns the total number of recorded entries.
