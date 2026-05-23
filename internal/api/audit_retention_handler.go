@@ -8,15 +8,15 @@ import (
 	"github.com/croncheck/internal/audit"
 )
 
-// AuditRetentionHandler exposes an endpoint to query and update the audit retention policy.
+// AuditRetentionHandler exposes GET/PUT/DELETE endpoints for managing
+// audit log retention policy and triggering manual purges.
 type AuditRetentionHandler struct {
 	reaper *audit.Reaper
-	policy *audit.RetentionPolicy
 }
 
-// NewAuditRetentionHandler creates a handler backed by the given reaper and policy.
-func NewAuditRetentionHandler(reaper *audit.Reaper, policy *audit.RetentionPolicy) *AuditRetentionHandler {
-	return &AuditRetentionHandler{reaper: reaper, policy: policy}
+// NewAuditRetentionHandler constructs a handler backed by the given Reaper.
+func NewAuditRetentionHandler(r *audit.Reaper) *AuditRetentionHandler {
+	return &AuditRetentionHandler{reaper: r}
 }
 
 func (h *AuditRetentionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -25,45 +25,46 @@ func (h *AuditRetentionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		h.handleGet(w, r)
 	case http.MethodPut:
 		h.handlePut(w, r)
+	case http.MethodDelete:
+		h.handleDelete(w, r)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 func (h *AuditRetentionHandler) handleGet(w http.ResponseWriter, _ *http.Request) {
-	type response struct {
-		MaxAgeSeconds int `json:"max_age_seconds"`
-		MaxEntries    int `json:"max_entries"`
-	}
-	resp := response{
-		MaxAgeSeconds: int(h.policy.MaxAge.Seconds()),
-		MaxEntries:    h.policy.MaxEntries,
+	maxAge, maxEntries := h.reaper.Config()
+	resp := map[string]interface{}{
+		"max_age_seconds": maxAge.Seconds(),
+		"max_entries":     maxEntries,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
 func (h *AuditRetentionHandler) handlePut(w http.ResponseWriter, r *http.Request) {
-	type request struct {
-		MaxAgeSeconds int `json:"max_age_seconds"`
-		MaxEntries    int `json:"max_entries"`
+	var body struct {
+		MaxAgeSeconds float64 `json:"max_age_seconds"`
+		MaxEntries    int     `json:"max_entries"`
 	}
-	var req request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if req.MaxAgeSeconds < 0 || req.MaxEntries < 0 {
-		http.Error(w, "values must be non-negative", http.StatusBadRequest)
-		return
-	}
-	h.policy.MaxAge = time.Duration(req.MaxAgeSeconds) * time.Second
-	h.policy.MaxEntries = req.MaxEntries
-	w.WriteHeader(http.StatusNoContent)
+	maxAge := time.Duration(body.MaxAgeSeconds * float64(time.Second))
+	h.reaper.SetConfig(maxAge, body.MaxEntries)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "updated"}) //nolint:errcheck
 }
 
-// RegisterAuditRetentionRoute registers the retention policy endpoint.
-func RegisterAuditRetentionRoute(mux *http.ServeMux, reaper *audit.Reaper, policy *audit.RetentionPolicy) {
-	handler := NewAuditRetentionHandler(reaper, policy)
-	mux.Handle("/audit/retention", handler)
+func (h *AuditRetentionHandler) handleDelete(w http.ResponseWriter, _ *http.Request) {
+	purged := h.reaper.Purge()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"purged": purged}) //nolint:errcheck
+}
+
+// RegisterAuditRetentionRoute mounts the handler at /audit/retention.
+func RegisterAuditRetentionRoute(mux *http.ServeMux, r *audit.Reaper) {
+	h := NewAuditRetentionHandler(r)
+	mux.Handle("/audit/retention", h)
 }
