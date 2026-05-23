@@ -97,3 +97,18 @@ func TestMetricsJobHandler_MethodNotAllowed(t *testing.T) {
 		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
+
+func TestMetricsJobHandler_ContentTypeJSON(t *testing.T) {
+	h, _, _ := setupMetricsJobHandler(t)
+
+	for _, path := range []string{"/jobs/backup/metrics", "/jobs/metrics"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		ct := rec.Header().Get("Content-Type")
+		if ct != "application/json" {
+			t.Errorf("path %s: expected Content-Type application/json, got %s", path, ct)
+		}
+	}
+}
